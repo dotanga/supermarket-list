@@ -1,0 +1,270 @@
+import React from "https://esm.sh/react@18";
+import ReactDOM from "https://esm.sh/react-dom@18/client";
+
+function App() {
+  const [items, setItems] = React.useState(() => {
+    try {
+      const raw = localStorage.getItem("he-grocery.items");
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  });
+  const [query, setQuery] = React.useState("");
+  const [qty, setQty] = React.useState(1);
+  const [cat, setCat] = React.useState("אחרים");
+  const [note, setNote] = React.useState("");
+  const [filter, setFilter] = React.useState("all");
+  const [dark, setDark] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem("he-grocery.dark") || "false"); } catch { return false; }
+  });
+  const [listName, setListName] = React.useState(() => localStorage.getItem("he-grocery.listName") || "קניות לבית");
+  const [listId, setListId] = React.useState(() => localStorage.getItem("he-grocery.listId") || crypto.randomUUID());
+  const [catalogOpen, setCatalogOpen] = React.useState(false);
+
+  const CATS = [
+    "ירקות", "פירות", "חלב", "בשר ועוף", "מאפים", "משקאות", "ניקיון",
+    "טואלטיקה", "קפואים", "שימורים", "מתוקים", "תבלינים", "אחרים"
+  ];
+
+  const STARTER_SUGGESTIONS = [
+    "חלב", "לחם", "ביצים", "גבינה לבנה", "אשל", "קוטג'", "טחינה",
+    "קפה", "סוכר", "שמן זית", "אורז", "פסטה", "טונה", "תירס", "חמאה",
+    "יוגורט", "מלפפונים", "עגבניות", "בצל", "שום", "תפוחי אדמה", "בננות",
+    "תפוחים", "עוף", "סטייק", "טחינה גולמית", "פיתות", "לאפה",
+    "נייר טואלט", "סבון", "שמפו", "אבקת כביסה", "טבליות למדיח", "מיונז",
+    "קטשופ", "חרדל", "שוקולד", "חטיפים", "ירקות מוקפאים"
+  ];
+
+  React.useEffect(() => {
+    document.documentElement.lang = "he";
+    document.documentElement.dir = "rtl";
+  }, []);
+
+  React.useEffect(() => {
+    localStorage.setItem("he-grocery.items", JSON.stringify(items));
+  }, [items]);
+
+  React.useEffect(() => {
+    localStorage.setItem("he-grocery.dark", JSON.stringify(dark));
+    if (dark) document.documentElement.classList.add("dark");
+    else document.documentElement.classList.remove("dark");
+  }, [dark]);
+
+  React.useEffect(() => {
+    localStorage.setItem("he-grocery.listName", listName);
+    localStorage.setItem("he-grocery.listId", listId);
+  }, [listName, listId]);
+
+  const filtered = React.useMemo(() => {
+    if (filter === "all") return items;
+    if (filter === "todo") return items.filter(x => !x.done);
+    if (filter === "done") return items.filter(x => x.done);
+    return items;
+  }, [items, filter]);
+
+  const grouped = React.useMemo(() => {
+    const map = new Map();
+    for (const it of filtered) {
+      const key = it.category || "אחרים";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(it);
+    }
+    return Array.from(map.entries()).sort((a, b) => CATS.indexOf(a[0]) - CATS.indexOf(b[0]));
+  }, [filtered]);
+
+  function addItem(name, options={}) {
+    name = (name || "").trim();
+    if (!name) return;
+    const exists = items.find(x => x.name === name && !x.done);
+    if (exists) {
+      setItems(prev => prev.map(x => x.id === exists.id ? { ...x, qty: (x.qty || 1) + (options.qty || qty || 1) } : x));
+      setQuery(""); setNote("");
+      return;
+    }
+    const newItem = {
+      id: crypto.randomUUID(),
+      name,
+      qty: options.qty ?? qty || 1,
+      category: options.category ?? cat,
+      note: options.note ?? note,
+      done: false,
+      createdAt: Date.now(),
+      listId,
+    };
+    setItems(prev => [newItem, ...prev]);
+    setQuery(""); setNote("");
+  }
+
+  function toggleDone(id) { setItems(prev => prev.map(x => x.id === id ? { ...x, done: !x.done } : x)); }
+  function removeItem(id) { setItems(prev => prev.filter(x => x.id !== id)); }
+  function clearDone() { setItems(prev => prev.filter(x => !x.done)); }
+
+  function exportJSON() {
+    const payload = { version: 1, listName, listId, items };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${listName.replace(/\s+/g,'_')}.json`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importJSON(file) {
+    const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const data = JSON.parse(fr.result);
+        if (Array.isArray(data.items)) {
+          setItems(data.items.map(x => ({ ...x, id: x.id || crypto.randomUUID() })));
+          if (data.listName) setListName(data.listName);
+          if (data.listId) setListId(data.listId);
+        } else { alert("קובץ לא תקין"); }
+      } catch { alert("שגיאה בטעינת הקובץ"); }
+    };
+    fr.readAsText(file);
+  }
+
+  const recRef = React.useRef(null);
+  const [listening, setListening] = React.useState(false);
+  function startVoice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("זיהוי קול לא נתמך בדפדפן הזה"); return; }
+    const rec = new SR();
+    rec.lang = 'he-IL';
+    rec.interimResults = false; rec.maxAlternatives = 1;
+    rec.onresult = (e) => {
+      const text = e.results[0][0].transcript.trim();
+      const m1 = text.match(/^(\d{1,3})\s+(.+)$/);
+      const m2 = text.match(/^(.+)\s+(\d{1,3})$/);
+      if (m1) { setQty(Number(m1[1])); setQuery(m1[2]); addItem(m1[2], { qty: Number(m1[1]) }); }
+      else if (m2) { setQty(Number(m2[2])); setQuery(m2[1]); addItem(m2[1], { qty: Number(m2[2]) }); }
+      else { setQuery(text); addItem(text); }
+      setListening(false);
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+    rec.start(); recRef.current = rec; setListening(true);
+  }
+  function stopVoice() { try { recRef.current && recRef.current.stop(); } catch {} setListening(false); }
+
+  React.useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addItem(query); }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [query, qty, cat, note, items]);
+
+  function ItemRow({ it }) {
+    return (
+      <div className={"flex items-center gap-3 p-3 rounded-xl bg-white/60 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700"}>
+        <input type="checkbox" checked={it.done} onChange={() => toggleDone(it.id)} className="w-5 h-5" />
+        <div className="flex-1 min-w-0">
+          <div className={"font-medium truncate " + (it.done ? "line-through opacity-60" : "")}>{it.name}</div>
+          <div className="text-sm text-neutral-500 dark:text-neutral-400 truncate">כמות: {it.qty || 1}{it.note ? ` · ${it.note}` : ''}</div>
+        </div>
+        <span className="text-xs px-2 py-1 rounded-full bg-neutral-100 dark:bg-neutral-700">{it.category || "אחרים"}</span>
+        <button onClick={() => removeItem(it.id)} className="text-red-600 hover:scale-105 transition">מחק✖</button>
+      </div>
+    );
+  }
+
+  const suggestions = React.useMemo(() => {
+    const q = query.trim();
+    const pool = Array.from(new Set([...STARTER_SUGGESTIONS, ...items.map(i => i.name)]));
+    if (!q) return pool.slice(0, 12);
+    return pool.filter(x => x.includes(q)).slice(0, 12);
+  }, [query, items]);
+
+  return (
+    <div className="min-h-screen bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-50 transition p-4 sm:p-6">
+      <header className="max-w-4xl mx-auto flex items-center justify-between gap-3 py-2">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setDark(d => !d)} className="px-3 py-2 rounded-xl bg-neutral-200 dark:bg-neutral-700">{dark ? '☾ כהה' : '☼ בהיר'}</button>
+          <button onClick={() => setCatalogOpen(true)} className="px-3 py-2 rounded-xl bg-neutral-200 dark:bg-neutral-700">📦 קטלוג מהיר</button>
+        </div>
+        <div className="flex-1 text-center">
+          <input className="bg-transparent text-2xl font-bold text-center focus:outline-none border-b border-dashed border-neutral-400" value={listName} onChange={(e)=>setListName(e.target.value)} />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="px-3 py-2 rounded-xl bg-neutral-200 dark:bg-neutral-700 cursor-pointer">
+            יבוא JSON
+            <input type="file" className="hidden" accept="application/json" onChange={(e)=> e.target.files?.[0] && importJSON(e.target.files[0])} />
+          </label>
+          <button onClick={clearDone} className="px-3 py-2 rounded-xl bg-neutral-200 dark:bg-neutral-700">נקה ✓</button>
+        </div>
+      </header>
+
+      <section className="max-w-4xl mx-auto mt-3">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 p-3 rounded-2xl bg-white/70 dark:bg-neutral-800/70 shadow">
+          <div className="md:col-span-5">
+            <input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="מה להוסיף? לדוגמה: 2 חלב" className="w-full px-4 py-3 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+          </div>
+          <div className="md:col-span-2">
+            <input type="number" min={1} value={qty} onChange={(e)=>setQty(Number(e.target.value)||1)} className="w-full px-4 py-3 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+          </div>
+          <div className="md:col-span-3">
+            <select value={cat} onChange={(e)=>setCat(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+              {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <input value={note} onChange={(e)=>setNote(e.target.value)} placeholder="הערה (אופציונלי)" className="w-full px-4 py-3 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+          </div>
+          <div className="md:col-span-12 flex items-center gap-3">
+            <button onClick={()=>addItem(query)} className="px-4 py-3 rounded-2xl bg-emerald-600 text-white shadow hover:scale-[1.02] transition">הוסף (Ctrl/Cmd+Enter)</button>
+            {!listening ? (
+              <button onClick={startVoice} className="px-4 py-3 rounded-2xl bg-indigo-600 text-white">🎤 הוסף בקול</button>
+            ) : (
+              <button onClick={stopVoice} className="px-4 py-3 rounded-2xl bg-red-600 text-white">⏹ עצור</button>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-sm">סינון:</span>
+              <select value={filter} onChange={(e)=>setFilter(e.target.value)} className="px-3 py-2 rounded-xl bg-neutral-200 dark:bg-neutral-700">
+                <option value="all">הכל</option>
+                <option value="todo">רק לקנות</option>
+                <option value="done">נקנו</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {suggestions.map(s => (
+            <button key={s} onClick={()=>addItem(s)} className="px-3 py-1 rounded-full bg-neutral-200 dark:bg-neutral-700 text-sm hover:scale-105 transition">{s}</button>
+          ))}
+        </div>
+      </section>
+
+      <main className="max-w-4xl mx-auto mt-4 space-y-5">
+        {grouped.map(([category, arr]) => (
+          <section key={category}>
+            <h2 className="flex items-center justify-between text-lg font-semibold mb-2">
+              <span>{category}</span>
+              <span className="text-sm text-neutral-500 dark:text-neutral-400">{arr.filter(x=>!x.done).length} לקנות · {arr.length} סה"כ</span>
+            </h2>
+            <div className="grid gap-2">
+              {arr.map(it => <ItemRow key={it.id} it={it} />)}
+            </div>
+          </section>
+        ))}
+        {items.length === 0 && (
+          <div className="text-center text-neutral-500 dark:text-neutral-400 py-12">הרשימה ריקה. תתחיל להוסיף משהו 👇</div>
+        )}
+      </main>
+
+      <footer className="max-w-4xl mx-auto text-center text-xs text-neutral-500 dark:text-neutral-400 mt-8 pb-6">
+        <div>בנוי ב-React, RTL מלא, שמירה מקומית, תמיכה בקול (אם הדפדפן מאפשר). ✨</div>
+        <div>טיפים: הקלד "2 חלב" או דבר כך להוספה מהירה. אפשר לייצא/לייבא JSON כדי לשתף בין מכשירים.</div>
+      </footer>
+
+      <style>{`
+        @media print {
+          header, .suggestions, footer, button, select, input { display: none !important; }
+          main { padding: 0 !important; }
+          h2 { border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 12px; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
