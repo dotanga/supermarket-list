@@ -1,23 +1,45 @@
-const CACHE_NAME = 'sababagrocery-v3';
-const ASSETS = ['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
+// Simple Service Worker to provide offline support for the grocery PWA.
+// It pre-caches the core application shell and caches additional GET
+// requests at runtime.  Cache version bumps when CACHE_NAME changes.
 
-self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+const CACHE_NAME = 'sababagrocery-v4';
+const ASSETS = [
+  './',
+  './index.html',
+  './app.js',
+  './manifest.webmanifest',
+  './icons/icon-192.png',
+  './icons/icon-512.png'
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+  );
 });
-self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE_NAME && caches.delete(k)))));
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(keys.map((key) => {
+      if (key !== CACHE_NAME) return caches.delete(key);
+    })))
+  );
 });
-self.addEventListener('fetch', (e) => {
-  const { request } = e;
-  e.respondWith(
-    caches.match(request).then(cached =>
-      cached || fetch(request).then(resp => {
-        if (request.method === 'GET' && resp.status === 200 && (resp.type === 'basic' || resp.type === 'opaque')) {
-          const clone = resp.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') return;
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      if (cached) return cached;
+      return fetch(request).then((response) => {
+        // Only cache successful responses from same origin
+        if (response.ok && response.type === 'basic') {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         }
-        return resp;
-      }).catch(() => cached)
-    )
+        return response;
+      }).catch(() => cached);
+    })
   );
 });
